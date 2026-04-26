@@ -5,46 +5,41 @@ Title: Analyzing the Relationship Between Screen Time and GPA
 Group: Luke Malcom, Judi Cavender, Reyna Salvador, Michelle Aguilera
 Date:  April 2026
 
-This script ingests the real survey responses (n = 20) from
-"Assessment (Responses).xlsx", parses the free-text screen-time
-strings into hours, and runs the full analysis used in the
-presentation and report:
-  - descriptive statistics
-  - Pearson and Spearman correlation
-  - 2x2 contingency table at the deck thresholds (GPA 3.5, ST 6h)
-  - conditional probabilities and Bayes' theorem
-  - chi-square independence test
-  - Bayesian Beta-Binomial posterior comparison
-  - Chebyshev's inequality on GPA
+Pipeline matches the slide deck exactly:
 
-Outputs:
-  screen_time_gpa_data.csv / .xlsx  -- cleaned dataset
-  histograms.png, scatter.png, posteriors.png
+  1. Data Collection -- read the Google Forms responses (n = 20)
+  2. Convert raw screen-time strings into decimal hours
+  3. Categorise each respondent into one of four sets using the deck's
+     thresholds:
+         High GPA  (G_H): GPA >= 3.5
+         Low  GPA  (G_L): GPA <  3.5
+         High ST   (S_H): screen time >= 6 hours
+         Low  ST   (S_L): screen time <  6 hours
+  4. Build a 2x2 contingency table
+  5. Compute conditional probabilities
+  6. Apply Bayes' theorem to obtain  P(G_H | S_H)
 """
 
 import re
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-from scipy import stats
 import openpyxl
+import pandas as pd
 
-RNG_SEED = 7
-np.random.seed(RNG_SEED)
-
-# ------------------------------------------------------------------
-# 1. Load and parse raw survey responses
-# ------------------------------------------------------------------
+GPA_THRESH = 3.5
+ST_THRESH  = 6.0
 SOURCE_XLSX = "Assessment (Responses).xlsx"
 
+
+# ------------------------------------------------------------------
+# 1. Load and convert raw survey responses
+# ------------------------------------------------------------------
 def parse_screen_time(value):
-    """Convert messy screen-time text/number into hours (float)."""
+    """Convert messy screen-time text/number into decimal hours."""
     if value is None:
         return None
     if isinstance(value, (int, float)):
         return float(value)
     s = str(value).lower().strip()
-    # Range like '9-10 hours' or '2-3 hours' -> midpoint
+    # Range like "9-10 hours" or "2-3 hours" -> midpoint
     m_range = re.search(r"(\d+(?:\.\d+)?)\s*-\s*(\d+(?:\.\d+)?)", s)
     if m_range:
         return (float(m_range.group(1)) + float(m_range.group(2))) / 2.0
@@ -70,158 +65,68 @@ def load_responses(path):
     records = []
     for r in rows[1:]:
         gpa = r[2]
-        st_raw = r[3]
-        st = parse_screen_time(st_raw)
-        if gpa is None or st is None:
-            continue
-        records.append({
-            "gpa": float(gpa),
-            "screen_time_raw": str(st_raw),
-            "screen_time_hours": round(float(st), 3),
-        })
+        st  = parse_screen_time(r[3])
+        if gpa is not None and st is not None:
+            records.append({
+                "gpa": float(gpa),
+                "screen_time_hours": round(st, 3),
+            })
     return pd.DataFrame(records)
 
 
-df_raw = load_responses(SOURCE_XLSX)
-df = df_raw[["gpa", "screen_time_hours"]].copy()
+df = load_responses(SOURCE_XLSX)
 df.insert(0, "student_id", [f"S{i+1:02d}" for i in range(len(df))])
 df.to_csv("screen_time_gpa_data.csv", index=False)
 df.to_excel("screen_time_gpa_data.xlsx", index=False)
-print(f"Loaded n = {len(df)} responses")
-print(df)
 
-x = df["screen_time_hours"].values
-y = df["gpa"].values
-N = len(df)
+print(f"Loaded n = {len(df)} responses\n")
+print(df.to_string(index=False))
 
 # ------------------------------------------------------------------
-# 2. Descriptive statistics
+# 2. Categorise into four sets and build the 2x2 contingency table
 # ------------------------------------------------------------------
-print("\n========== DESCRIPTIVE STATISTICS ==========")
-desc = df[["screen_time_hours", "gpa"]].agg(["mean", "median", "var", "std", "min", "max"])
-print(desc.round(3))
+high_gpa = df["gpa"]               >= GPA_THRESH
+high_st  = df["screen_time_hours"] >= ST_THRESH
 
-mean_x, mean_y = float(x.mean()), float(y.mean())
-sd_x, sd_y = float(x.std(ddof=1)), float(y.std(ddof=1))
+n_GH_SH = int((  high_gpa &  high_st ).sum())
+n_GH_SL = int((  high_gpa & ~high_st ).sum())
+n_GL_SH = int(( ~high_gpa &  high_st ).sum())
+n_GL_SL = int(( ~high_gpa & ~high_st ).sum())
+N       = len(df)
 
-fig, axes = plt.subplots(1, 2, figsize=(11, 4))
-axes[0].hist(x, bins=8, color="steelblue", edgecolor="black")
-axes[0].axvline(mean_x, color="red", ls="--", label=f"mean={mean_x:.2f}")
-axes[0].set_title("Daily Screen Time (hours)"); axes[0].set_xlabel("Hours/day"); axes[0].legend()
-axes[1].hist(y, bins=8, color="seagreen", edgecolor="black")
-axes[1].axvline(mean_y, color="red", ls="--", label=f"mean={mean_y:.2f}")
-axes[1].set_title("GPA distribution"); axes[1].set_xlabel("GPA (0-4)"); axes[1].legend()
-plt.tight_layout(); plt.savefig("histograms.png", dpi=140); plt.close()
-
-# ------------------------------------------------------------------
-# 3. Correlation and regression
-# ------------------------------------------------------------------
-print("\n========== CORRELATION & REGRESSION ==========")
-cov_xy = float(np.cov(x, y, ddof=1)[0, 1])
-pearson_r, pearson_p = stats.pearsonr(x, y)
-spearman_r, spearman_p = stats.spearmanr(x, y)
-slope, intercept, r_val, p_val, stderr = stats.linregress(x, y)
-r_squared = r_val ** 2
-
-z = np.arctanh(pearson_r)
-se = 1 / np.sqrt(N - 3)
-zcrit = stats.norm.ppf(0.975)
-ci_low, ci_high = float(np.tanh(z - zcrit * se)), float(np.tanh(z + zcrit * se))
-
-print(f"Cov(X,Y)        = {cov_xy:.4f}")
-print(f"Pearson r       = {pearson_r:.4f}  (p = {pearson_p:.4f})  95% CI [{ci_low:.3f}, {ci_high:.3f}]")
-print(f"Spearman rho    = {spearman_r:.4f}  (p = {spearman_p:.4f})")
-print(f"Regression      : GPA = {intercept:.3f} + ({slope:.4f}) * screen_time")
-print(f"R^2             = {r_squared:.4f}")
-
-fig, ax = plt.subplots(figsize=(7, 5))
-ax.scatter(x, y, color="steelblue", edgecolor="black", s=60)
-xs = np.linspace(x.min(), x.max(), 100)
-ax.plot(xs, intercept + slope * xs, color="firebrick", lw=2,
-        label=f"GPA = {intercept:.2f} + ({slope:.3f})\u00b7ST")
-ax.axhline(3.5, color="grey", ls=":", lw=1)
-ax.axvline(6.0, color="grey", ls=":", lw=1)
-ax.set_xlabel("Daily screen time (hours)")
-ax.set_ylabel("GPA")
-ax.set_title(f"Screen Time vs GPA  (n={N},  r = {pearson_r:.2f})")
-ax.legend(); ax.grid(alpha=0.3)
-plt.tight_layout(); plt.savefig("scatter.png", dpi=140); plt.close()
+print("\n========== CONTINGENCY TABLE ==========")
+print(f"  G_H  =  GPA >= {GPA_THRESH}")
+print(f"  S_H  =  screen time >= {ST_THRESH} h\n")
+print(f"               S_H    S_L    Row")
+print(f"   G_H        {n_GH_SH:3d}    {n_GH_SL:3d}    {n_GH_SH + n_GH_SL:3d}")
+print(f"   G_L        {n_GL_SH:3d}    {n_GL_SL:3d}    {n_GL_SH + n_GL_SL:3d}")
+print(f"   Col total  {n_GH_SH + n_GL_SH:3d}    {n_GH_SL + n_GL_SL:3d}    {N:3d}")
 
 # ------------------------------------------------------------------
-# 4. Conditional probability + Bayes' theorem  (deck thresholds)
+# 3. Conditional probabilities
 # ------------------------------------------------------------------
-print("\n========== CONDITIONAL PROBABILITY (BAYES) ==========")
-GPA_THRESH = 3.5
-ST_THRESH  = 6.0
-high_gpa = y >= GPA_THRESH
-high_st  = x >= ST_THRESH
+P_GH          = (n_GH_SH + n_GH_SL) / N
+P_GL          = 1 - P_GH
+P_SH          = (n_GH_SH + n_GL_SH) / N
+P_SL          = 1 - P_SH
+P_SH_given_GH = n_GH_SH / (n_GH_SH + n_GH_SL)
+P_SH_given_GL = n_GL_SH / (n_GL_SH + n_GL_SL)
 
-n_GH_SH = int(np.sum(high_gpa & high_st))
-n_GH_SL = int(np.sum(high_gpa & ~high_st))
-n_GL_SH = int(np.sum(~high_gpa & high_st))
-n_GL_SL = int(np.sum(~high_gpa & ~high_st))
+print("\n========== CONDITIONAL PROBABILITIES ==========")
+print(f"  P(G_H)        = {P_GH:.3f}")
+print(f"  P(G_L)        = {P_GL:.3f}")
+print(f"  P(S_H)        = {P_SH:.3f}")
+print(f"  P(S_L)        = {P_SL:.3f}")
+print(f"  P(S_H | G_H)  = {P_SH_given_GH:.3f}")
+print(f"  P(S_H | G_L)  = {P_SH_given_GL:.3f}")
 
-print(f"Categories: GH=GPA>={GPA_THRESH},  SH=ST>={ST_THRESH}h")
-print(f"                  SH       SL")
-print(f"  GH (high GPA):  {n_GH_SH:3d}      {n_GH_SL:3d}     row={n_GH_SH+n_GH_SL}")
-print(f"  GL (low  GPA):  {n_GL_SH:3d}      {n_GL_SL:3d}     row={n_GL_SH+n_GL_SL}")
-print(f"  col totals  :  {n_GH_SH+n_GL_SH:3d}      {n_GH_SL+n_GL_SL:3d}     N={N}")
-
-P_GH = (n_GH_SH + n_GH_SL) / N
-P_GL = 1 - P_GH
-P_SH = (n_GH_SH + n_GL_SH) / N
-P_SL = 1 - P_SH
-P_SH_given_GH = n_GH_SH / max(n_GH_SH + n_GH_SL, 1)
-P_SH_given_GL = n_GL_SH / max(n_GL_SH + n_GL_SL, 1)
+# ------------------------------------------------------------------
+# 4. Bayes' theorem:  P(G_H | S_H) = P(S_H | G_H) * P(G_H) / P(S_H)
+# ------------------------------------------------------------------
 P_GH_given_SH = (P_SH_given_GH * P_GH) / P_SH
 
-print(f"P(GH)              = {P_GH:.3f}")
-print(f"P(SH)              = {P_SH:.3f}")
-print(f"P(SH | GH)         = {P_SH_given_GH:.3f}")
-print(f"P(SH | GL)         = {P_SH_given_GL:.3f}")
-print(f"P(GH | SH) (Bayes) = {P_GH_given_SH:.3f}")
-
-chi2, chi_p, dof, exp = stats.chi2_contingency(
-    [[n_GH_SH, n_GH_SL], [n_GL_SH, n_GL_SL]], correction=False
-)
-print(f"Chi-square indep.: chi2 = {chi2:.3f}, p = {chi_p:.4f}")
-
-# ------------------------------------------------------------------
-# 5. Bayesian Beta-Binomial posterior comparison
-# ------------------------------------------------------------------
-print("\n========== BAYESIAN BETA-BINOMIAL ==========")
-alpha_prior, beta_prior = 1, 1
-a_GH = alpha_prior + n_GH_SH; b_GH = beta_prior + n_GH_SL
-a_GL = alpha_prior + n_GL_SH; b_GL = beta_prior + n_GL_SL
-post_GH = stats.beta(a_GH, b_GH)
-post_GL = stats.beta(a_GL, b_GL)
-print(f"Posterior p(SH|GH) ~ Beta({a_GH},{b_GH})  mean={post_GH.mean():.3f}  95% CrI=[{post_GH.ppf(.025):.3f}, {post_GH.ppf(.975):.3f}]")
-print(f"Posterior p(SH|GL) ~ Beta({a_GL},{b_GL})  mean={post_GL.mean():.3f}  95% CrI=[{post_GL.ppf(.025):.3f}, {post_GL.ppf(.975):.3f}]")
-
-rng = np.random.default_rng(RNG_SEED)
-M = 200_000
-s_gh = rng.beta(a_GH, b_GH, size=M)
-s_gl = rng.beta(a_GL, b_GL, size=M)
-prob_gh_gt_gl = float(np.mean(s_gh > s_gl))
-print(f"P(p(SH|GH) > p(SH|GL) | data) = {prob_gh_gt_gl:.4f}")
-
-
-ps = np.linspace(0, 1, 400)
-fig, ax = plt.subplots(figsize=(7, 4.5))
-ax.plot(ps, post_GH.pdf(ps), label=f"p(SH | GH)  Beta({a_GH},{b_GH})", color="firebrick", lw=2)
-ax.plot(ps, post_GL.pdf(ps), label=f"p(SH | GL)  Beta({a_GL},{b_GL})", color="steelblue", lw=2)
-ax.set_xlabel("Probability of high screen time"); ax.set_ylabel("Posterior density")
-ax.set_title(f"Beta-Binomial posteriors  \u00b7  P(p_GH > p_GL | data) = {prob_gh_gt_gl:.3f}")
-ax.legend(); ax.grid(alpha=0.3)
-plt.tight_layout(); plt.savefig("posteriors.png", dpi=140); plt.close()
-
-# ------------------------------------------------------------------
-# 6. Chebyshev's inequality on GPA
-# ------------------------------------------------------------------
-print("\n========== CHEBYSHEV'S INEQUALITY ==========")
-for k in [1.5, 2, 2.5, 3]:
-    bound = 1 / (k ** 2)
-    empirical = float(np.mean(np.abs(y - mean_y) >= k * sd_y))
-    print(f"  k={k}: 1/k^2 = {bound:.3f}  |  empirical = {empirical:.3f}")
-print(f"(GPA mean = {mean_y:.3f}, SD = {sd_y:.3f})")
+print("\n========== BAYES' THEOREM ==========")
+print(f"  P(G_H | S_H)  =  P(S_H | G_H) * P(G_H) / P(S_H)")
+print(f"                =  ({P_SH_given_GH:.3f} * {P_GH:.3f}) / {P_SH:.3f}")
+print(f"                =  {P_GH_given_SH:.3f}")
 print("\nDONE.")

@@ -4,37 +4,26 @@
 **Authors:** Luke Malcom, Judi Cavender, Reyna Salvador, Michelle Aguilera
 
 This repo contains the analysis pipeline for our class survey on the
-relationship between daily screen time and GPA. The report (`.docx`) and
-slide deck (`.pptx`) are the project deliverables and are kept locally,
-outside version control.
+relationship between daily screen time and GPA. The methodology mirrors the
+slide deck exactly: parse the survey responses, categorise into four sets at
+the thresholds GPA = 3.5 and screen time = 6 h, build a 2×2 contingency
+table, compute conditional probabilities, and apply Bayes' theorem.
+
+The report (`.docx`) and slide deck (`.pptx`) are the project deliverables
+and are kept locally, outside version control.
 
 ## What's in here
 
 | File | Purpose |
 |---|---|
-| `analysis.py` | Reads the raw Google Forms export, parses the messy free-text screen-time strings into hours, and runs the full statistical pipeline used in the report and slides |
+| `analysis.py` | Reads the raw Google Forms export, parses screen-time strings into decimal hours, builds the 2×2 contingency table, and applies Bayes' theorem |
 | `Assessment (Responses).xlsx` | Raw survey export (n = 20 responses) |
-| `.gitignore` | Excludes the docx, pptx, and regenerated analysis outputs |
-
-## What `analysis.py` computes
-
-- Descriptive statistics (mean, median, variance, SD) for screen time and GPA
-- Pearson and Spearman correlation, with Fisher-z 95% CI for r
-- Simple linear regression of GPA on screen time
-- 2×2 contingency table at the deck thresholds (GPA = 3.5, screen time = 6 h)
-- Conditional probabilities and Bayes' theorem flip
-- Chi-square test of independence
-- Bayesian Beta-Binomial posterior comparison via Monte Carlo (200,000 draws)
-- Chebyshev's inequality on GPA
-
-It writes a cleaned CSV/XLSX of the data and three figures
-(`scatter.png`, `histograms.png`, `posteriors.png`) into the working
-directory; all of these are gitignored because they're regenerable.
+| `.gitignore` | Excludes the docx, pptx, and regenerated outputs |
 
 ## Running it
 
 ```
-pip install numpy pandas scipy matplotlib openpyxl
+pip install pandas openpyxl
 python3 analysis.py
 ```
 
@@ -42,13 +31,13 @@ python3 analysis.py
 
 With the deck's thresholds (GPA ≥ 3.5 = high, screen time ≥ 6 h = high):
 
-- P(S_H | G_H) = 0.60, P(S_H | G_L) = 0.50
-- Bayes-flipped: P(G_H | S_H) = 0.545
-- Bayesian posterior P(p(S_H | G_H) > p(S_H | G_L) | data) = 0.66
-- χ² independence: χ² = 0.20, p = 0.65
-- Pearson r = +0.025 (p = 0.92)
+- P(G_H) = 0.500, P(S_H) = 0.550
+- P(S_H | G_H) = 0.600 — probability of high screen time given a high GPA
+- P(S_H | G_L) = 0.500 — probability of high screen time given a low GPA
+- Bayes' theorem: P(G_H | S_H) = (0.600 · 0.500) / 0.550 = **0.545**
 
-The point estimates lean slightly *against* the popular "more screens →
-worse grades" hypothesis — high-GPA students were if anything marginally
-heavier screen users — but at n = 20 the formal tests don't provide strong
-evidence of dependence in either direction.
+Bayes' theorem shows there is approximately a **60% probability** that a
+high-GPA student also has a high screen time. Contrary to the working
+hypothesis, students in the high-GPA group were slightly more likely to be
+heavy screen users. Limitations: small sample (n = 20) and no breakdown of
+productive vs. unproductive screen time.
